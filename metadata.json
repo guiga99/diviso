@@ -1,0 +1,6 @@
+{
+  "name": "Divisor de Despesas Pessoal",
+  "description": "Fácil rateamento de despesas entre amigos e grupos com cálculo automático de saldos e simplificação de dívidas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

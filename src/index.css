@@ -1,0 +1,81 @@
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Lora", Georgia, serif;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Custom colors to map Natural Tones design theme */
+  --color-nat-bg: #F5F5F0;
+  --color-nat-sidebar: #EBEBE3;
+  --color-nat-border: #D9D9D1;
+  --color-nat-primary: #5A5A40;
+  --color-nat-primary-hover: #464630;
+  --color-nat-text: #2D2D2A;
+  --color-nat-muted: #8A8A7C;
+  --color-nat-green: #5A6F56;
+  --color-nat-green-light: #8E9D7F;
+  --color-nat-red: #9A6048;
+  --color-nat-orange: #C18C5D;
+  --color-nat-moss: #496159;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-nat-bg);
+  color: var(--color-nat-text);
+  margin: 0;
+}
+
+/* --- Printer Stylesheets Override --- */
+@media print {
+  /* Hide typical web-only layout containers */
+  #app-top-header,
+  #app-left-navigation-panel,
+  #history-filter-controls,
+  #app-footer,
+  #print-report-btn,
+  .no-print,
+  button,
+  header,
+  footer {
+    display: none !important;
+  }
+
+  /* Expand main container to full width and remove column restrictions */
+  #app-main-grid {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    grid-template-columns: none !important;
+  }
+
+  #app-primary-dashboard-window {
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important;
+  }
+
+  /* Reset body and background specs for paper format */
+  body, 
+  #app-root-layout {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  /* Force printers to render backgrounds and borders correctly */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Optimize page size and margins customly */
+  @page {
+    size: A4 portrait;
+    margin: 1.5cm;
+  }
+}
