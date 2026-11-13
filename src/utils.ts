@@ -26,102 +26,74 @@ export const AVATAR_COLORS = [
  * Calculadora de Saldos: calcula o saldo líquido de cada amigo em um grupo ou globalmente.
  * Retorna um mapeamento de friendId para saldo (positivo = a receber, negativo = deve pagar).
  */
+// Allocate integer cents once per expense, so every cent is accounted for.
+export function expenseShares(expense: Expense): Record<string, number> {
+  const entries = Object.entries(expense.splits).filter(([, value]) => value > 0);
+  const cents = Math.round(expense.amount * 100);
+  if (!entries.length) return {};
+  if (expense.splitType === 'exact') {
+    return Object.fromEntries(entries.map(([id, value]) => [id, Math.round(value * 100)]));
+  }
+  const weights = entries.map(([, value]) => expense.splitType === 'equal' ? 1 : value);
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+  const raw = weights.map(weight => cents * weight / totalWeight);
+  const shares = raw.map(Math.floor);
+  const order = raw.map((value, index) => ({ index, remainder: value - shares[index] }))
+    .sort((a, b) => b.remainder - a.remainder || a.index - b.index);
+  const remaining = cents - shares.reduce((sum, value) => sum + value, 0);
+  for (let i = 0; i < remaining; i++) shares[order[i].index]++;
+  return Object.fromEntries(entries.map(([id], index) => [id, shares[index]]));
+}
+
 export function calculateBalances(
-  expenses: Expense[],
-  friendIds: string[],
-  groupId: string | null = undefined
+  expenses: Expense[], friendIds: string[], groupId?: string | null
 ): Record<string, number> {
-  const balances: Record<string, number> = {};
-  
-  // Inicializa todos com saldo zero
-  friendIds.forEach(id => {
-    balances[id] = 0;
-  });
-
-  // Filtra despesas pelo grupo se um grupo específico for informado
-  const filteredExpenses = groupId !== undefined
-    ? expenses.filter(e => e.groupId === groupId)
-    : expenses;
-
-  filteredExpenses.forEach(e => {
-    const paidBy = e.paidById;
-    const totalAmount = e.amount;
-
-    // Se quem pagou for um amigo conhecido, dá crédito pra ele
-    if (balances[paidBy] !== undefined) {
-      balances[paidBy] += totalAmount;
+  const balances = Object.fromEntries(friendIds.map(id => [id, 0]));
+  for (const expense of expenses) {
+    if (groupId !== undefined && expense.groupId !== groupId) continue;
+    const shares = expenseShares(expense);
+    if (!Object.keys(shares).length) continue;
+    const amount = Math.round(expense.amount * 100);
+    if (expense.paidById in balances) balances[expense.paidById] += amount;
+    for (const [id, share] of Object.entries(shares)) {
+      if (id in balances) balances[id] -= share;
     }
+  }
+  return Object.fromEntries(Object.entries(balances).map(([id, cents]) => [id, cents / 100]));
+}
 
-    if (e.isSettlement) {
-      // É uma liquidação direta entre duas pessoas: paidBy pagou para e.splits[receiverId]
-      const receiverIds = Object.keys(e.splits);
-      if (receiverIds.length > 0) {
-        const receiverId = receiverIds[0];
-        if (balances[receiverId] !== undefined) {
-          balances[receiverId] -= totalAmount;
-        }
-      }
-    } else {
-      // É uma despesa padrão dividida entre membros
-      const splitFriendIds = Object.keys(e.splits).filter(id => e.splits[id] > 0);
-      
-      // Se não há nenhum participante marcado, divide entre todos os amigos no contexto
-      const activeSplitters = splitFriendIds.length > 0 ? splitFriendIds : friendIds;
-
-      if (e.splitType === 'equal') {
-        const share = totalAmount / activeSplitters.length;
-        activeSplitters.forEach(id => {
-          if (balances[id] !== undefined) {
-            balances[id] -= share;
-          }
-        });
-      } else if (e.splitType === 'exact') {
-        activeSplitters.forEach(id => {
-          const share = e.splits[id] || 0;
-          if (balances[id] !== undefined) {
-            balances[id] -= share;
-          }
-        });
-      } else if (e.splitType === 'percentage') {
-        activeSplitters.forEach(id => {
-          const pct = e.splits[id] || 0;
-          const share = totalAmount * (pct / 100);
-          if (balances[id] !== undefined) {
-            balances[id] -= share;
-          }
-        });
-      }
-    }
-  });
-
-  // Limpa ruídos de arredondamento de float (arredonda para 2 casas decimais)
-  Object.keys(balances).forEach(id => {
-    balances[id] = Math.round(balances[id] * 100) / 100;
-  });
-
-  return balances;
+// Positive means the other friend owes the active user; negative means the reverse.
+export function balanceWithFriend(expenses: Expense[], userId: string, otherId: string): number {
+  if (userId === otherId) return 0;
+  let cents = 0;
+  for (const expense of expenses) {
+    const shares = expenseShares(expense);
+    if (expense.paidById === userId) cents += shares[otherId] || 0;
+    if (expense.paidById === otherId) cents -= shares[userId] || 0;
+  }
+  return cents / 100;
 }
 
 /**
  * Algoritmo de Simplificação de Dívidas:
- * Encontra a quantidade mínima de transferências necessárias para liquidar todas as pendências.
+ * Combina credores e devedores para reduzir as transferências necessárias.
  */
 export function simplifyDebts(
   expenses: Expense[],
   friends: Friend[],
-  groupId: string | null = undefined
+  groupId?: string | null
 ): Debt[] {
   const friendIds = friends.map(f => f.id);
   const balances = calculateBalances(expenses, friendIds, groupId);
 
-  // Divide em credores (balance > 0.01) e devedores (balance < -0.01)
+  // Divide em credores (balance >= 0.01) e devedores (balance <= -0.01)
   const creditors: { id: string; balance: number }[] = [];
   const debtors: { id: string; balance: number }[] = [];
 
   Object.entries(balances).forEach(([id, balance]) => {
-    if (balance > 0.01) {
+    if (balance >= 0.01) {
       creditors.push({ id, balance });
-    } else if (balance < -0.01) {
+    } else if (balance <= -0.01) {
       debtors.push({ id, balance: -balance }); // Guardamos o débito como positivo para facilitar
     }
   });
@@ -142,7 +114,7 @@ export function simplifyDebts(
     // Valor da transferência é o menor entre a dívida e o crédito
     const amount = Math.min(creditor.balance, debtor.balance);
     
-    if (amount > 0.01) {
+    if (amount >= 0.01) {
       transactions.push({
         fromId: debtor.id,
         toId: creditor.id,
@@ -150,8 +122,8 @@ export function simplifyDebts(
       });
     }
 
-    creditor.balance -= amount;
-    debtor.balance -= amount;
+    creditor.balance = Math.round((creditor.balance - amount) * 100) / 100;
+    debtor.balance = Math.round((debtor.balance - amount) * 100) / 100;
 
     if (creditor.balance < 0.01) {
       cPointer++;

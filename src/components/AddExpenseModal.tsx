@@ -7,6 +7,7 @@ import * as Icons from 'lucide-react';
 
 interface AddExpenseModalProps {
   isOpen: boolean;
+  initialExpense?: Expense | null;
   onClose: () => void;
   friends: Friend[];
   groups: Group[];
@@ -16,6 +17,7 @@ interface AddExpenseModalProps {
 
 export default function AddExpenseModal({
   isOpen,
+  initialExpense,
   onClose,
   friends,
   groups,
@@ -48,30 +50,28 @@ export default function AddExpenseModal({
 
   const membersInContext = getContextMembers();
 
-  // Synchronize defaults on opening or changing group selection
   useEffect(() => {
-    if (isOpen) {
-      setGroupId(activeGroupId || 'none');
-    }
-  }, [isOpen, activeGroupId]);
+    if (!isOpen) return;
+    setDescription(initialExpense?.description || '');
+    setAmountStr(initialExpense ? String(initialExpense.amount) : '');
+    setDate(initialExpense?.date || new Date().toISOString().split('T')[0]);
+    setCategoryId(initialExpense?.categoryId || 'food');
+    setGroupId(initialExpense?.groupId || activeGroupId || 'none');
+    setPaidById(initialExpense?.paidById || '');
+    setSplitType(initialExpense?.splitType || 'equal');
+    setValidationError('');
+  }, [isOpen, initialExpense, activeGroupId]);
 
-  // When the group change or friends loaded, initialize participant splits and payer
   useEffect(() => {
+    if (!isOpen) return;
     const currentMembers = getContextMembers();
-    if (currentMembers.length > 0) {
-      // Set default paidById to the first member in context if empty or not in context
-      if (!paidById || !currentMembers.some(m => m.id === paidById)) {
-        setPaidById(currentMembers[0].id);
-      }
-
-      // Initialize splits: all participating equally
-      const initialSplits: Record<string, number> = {};
-      currentMembers.forEach(m => {
-        initialSplits[m.id] = splitType === 'equal' ? 1 : 0;
-      });
-      setSplits(initialSplits);
-    }
-  }, [groupId, friends, groups, splitType, isOpen]);
+    const editingOriginal = initialExpense && groupId === (initialExpense.groupId || 'none');
+    setPaidById(previous => currentMembers.some(m => m.id === previous) ? previous : currentMembers[0]?.id || '');
+    setSplits(Object.fromEntries(currentMembers.map(m => [m.id,
+      editingOriginal && splitType === initialExpense.splitType
+        ? initialExpense.splits[m.id] || 0 : splitType === 'equal' ? 1 : 0
+    ])));
+  }, [groupId, friends, groups, splitType, isOpen, initialExpense]);
 
   // Handle participant toggle (mainly for equal split)
   const handleToggleParticipant = (friendId: string) => {
@@ -101,7 +101,7 @@ export default function AddExpenseModal({
 
   // Helper to dynamically balance custom exact divisions
   const forceEquallyCustom = () => {
-    const amt = parseFloat(amountStr) || 0;
+    const amt = splitType === 'percentage' ? 100 : parseFloat(amountStr) || 0;
     if (amt <= 0) return;
 
     const participatingMembers = Object.keys(splits).filter(id => {
@@ -111,30 +111,23 @@ export default function AddExpenseModal({
 
     if (participatingMembers.length === 0) return;
 
-    const equalShare = amt / participatingMembers.length;
-    const roundedShare = Math.round(equalShare * 100) / 100;
-    
-    setSplits(prev => {
-      const newSplits = { ...prev };
-      participatingMembers.forEach((id, idx) => {
-        if (idx === participatingMembers.length - 1) {
-          // Adjust last digit to compensate for rounding errors
-          const sumOfOthers = roundedShare * (participatingMembers.length - 1);
-          newSplits[id] = Math.max(0, Math.round((amt - sumOfOthers) * 100) / 100);
-        } else {
-          newSplits[id] = roundedShare;
-        }
-      });
-      return newSplits;
-    });
+    const totalCents = Math.round(amt * 100);
+    const base = Math.floor(totalCents / participatingMembers.length);
+    const remainder = totalCents % participatingMembers.length;
+    setSplits(prev => ({
+      ...prev,
+      ...Object.fromEntries(participatingMembers.map((id, index) =>
+        [id, (base + (index < remainder ? 1 : 0)) / 100]
+      )),
+    }));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setValidationError('');
 
-    const amt = parseFloat(amountStr);
-    if (isNaN(amt) || amt <= 0) {
+    const amt = Math.round(Number(amountStr) * 100) / 100;
+    if (!Number.isFinite(amt) || amt <= 0) {
       setValidationError('Insira um valor maior que zero.');
       return;
     }
@@ -157,17 +150,21 @@ export default function AddExpenseModal({
       return;
     }
 
+    if (!membersInContext.some(m => m.id === paidById) || Object.keys(splits).some(id => !Number.isFinite(splits[id]) || splits[id] < 0)) {
+      setValidationError('Confira o pagador e os valores do rateio.');
+      return;
+    }
+
     // Validate totals
     if (splitType === 'exact') {
       const sum = participatingIds.reduce((acc, id) => acc + (splits[id] || 0), 0);
-      const diff = Math.abs(sum - amt);
-      if (diff > 0.05) {
+      if (Math.round(sum * 100) !== Math.round(amt * 100)) {
         setValidationError(`A soma dos valores (R$ ${sum.toFixed(2)}) deve ser exatamente o total (R$ ${amt.toFixed(2)}). Balanço: R$ ${(amt - sum).toFixed(2)}`);
         return;
       }
     } else if (splitType === 'percentage') {
       const sum = participatingIds.reduce((acc, id) => acc + (splits[id] || 0), 0);
-      if (Math.abs(sum - 100) > 0.01) {
+      if (Math.abs(sum - 100) > 0.000001) {
         setValidationError(`A soma das porcentagens deve ser exatamente 100%. Soma atual: ${sum}%`);
         return;
       }
@@ -242,7 +239,7 @@ export default function AddExpenseModal({
                   <Receipt size={20} id="add-expense-modal-icon-header" />
                 </div>
                 <h3 className="text-lg font-bold text-nat-text font-serif italic" id="add-expense-modal-title">
-                  Adicionar Despesa
+                  {initialExpense ? 'Editar Despesa' : 'Adicionar Despesa'}
                 </h3>
               </div>
               <button

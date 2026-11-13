@@ -1,21 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Friend, Group } from '../types';
 import { X, Users, Search, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface AddGroupModalProps {
   isOpen: boolean;
+  initialGroup?: Group | null;
   onClose: () => void;
   friends: Friend[];
-  onAddGroup: (group: Omit<Group, 'id' | 'createdAt'>) => void;
+  onAddGroup: (group: Omit<Group, 'id' | 'createdAt'>) => void | boolean;
 }
 
-export default function AddGroupModal({ isOpen, onClose, friends, onAddGroup }: AddGroupModalProps) {
+export default function AddGroupModal({ isOpen, onClose, friends, onAddGroup, initialGroup }: AddGroupModalProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [selectedFriendIds, setSelectedFriendIds] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setName(initialGroup?.name || '');
+    setDescription(initialGroup?.description || '');
+    setSelectedFriendIds(initialGroup?.memberIds || []);
+    setSearchTerm('');
+    setError('');
+  }, [isOpen, initialGroup]);
 
   const handleToggleFriend = (id: string) => {
     setSelectedFriendIds(prev => 
@@ -34,11 +44,13 @@ export default function AddGroupModal({ isOpen, onClose, friends, onAddGroup }: 
       return;
     }
 
-    onAddGroup({
+    const saved = onAddGroup({
       name: name.trim(),
       description: description.trim() || undefined,
       memberIds: selectedFriendIds,
     });
+
+    if (saved === false) return;
 
     // Reset values
     setName('');
@@ -83,7 +95,7 @@ export default function AddGroupModal({ isOpen, onClose, friends, onAddGroup }: 
                   <Users size={20} id="add-group-modal-icon-header" />
                 </div>
                 <h3 className="text-lg font-bold text-nat-text font-serif italic" id="add-group-modal-title">
-                  Criar Novo Grupo de Rateio
+                  {initialGroup ? 'Editar Grupo' : 'Criar Novo Grupo de Rateio'}
                 </h3>
               </div>
               <button
@@ -214,7 +226,7 @@ export default function AddGroupModal({ isOpen, onClose, friends, onAddGroup }: 
                   id="add-group-submit-btn"
                 >
                   <Users size={16} />
-                  Criar Grupo
+                  {initialGroup ? 'Salvar Grupo' : 'Criar Grupo'}
                 </button>
               </div>
             </form>

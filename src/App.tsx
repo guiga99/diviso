@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, ChangeEvent } from 'react';
 import { Friend, Group, Expense, Debt } from './types';
 import {
   calculateBalances,
+  balanceWithFriend,
   simplifyDebts,
   INITIAL_FRIENDS,
   INITIAL_GROUPS,
@@ -25,6 +26,7 @@ import {
   TrendingDown,
   Search,
   Trash2,
+  Pencil,
   Download,
   Upload,
   RefreshCw,
@@ -58,6 +60,9 @@ export default function App() {
   // Selected Detail views
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null);
+
+  const [editingGroup, setEditingGroup] = useState<Group | null>(null);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
   // --- Modals State ---
   const [isFriendModalOpen, setIsFriendModalOpen] = useState(false);
@@ -140,6 +145,19 @@ export default function App() {
   };
 
   const handleAddGroup = (newGroupData: Omit<Group, 'id' | 'createdAt'>) => {
+    if (editingGroup) {
+      const removed = editingGroup.memberIds.filter(id => !newGroupData.memberIds.includes(id));
+      if (expenses.some(e => e.groupId === editingGroup.id && removed.some(id => e.paidById === id || e.splits[id] > 0))) {
+        alert('Não é possível remover participantes com lançamentos no grupo. Edite ou exclua esses lançamentos primeiro.');
+        return false;
+      }
+      const updated = groups.map(g => g.id === editingGroup.id ? { ...g, ...newGroupData } : g);
+      setGroups(updated);
+      saveToDisk(friends, updated, expenses, activeUserId);
+      setEditingGroup(null);
+      showNotice('Grupo atualizado!');
+      return;
+    }
     const newGroup: Group = {
       ...newGroupData,
       id: 'g_' + Date.now(),
@@ -154,6 +172,14 @@ export default function App() {
   };
 
   const handleAddExpense = (newExpenseData: Omit<Expense, 'id'>) => {
+    if (editingExpense) {
+      const updated = expenses.map(e => e.id === editingExpense.id ? { ...e, ...newExpenseData } : e);
+      setExpenses(updated);
+      saveToDisk(friends, groups, updated, activeUserId);
+      setEditingExpense(null);
+      showNotice('Despesa atualizada!');
+      return;
+    }
     const newExpense: Expense = {
       ...newExpenseData,
       id: 'e_' + Date.now(),
@@ -164,7 +190,19 @@ export default function App() {
     showNotice(`Despesa "${newExpense.description}" adicionada!`);
   };
 
+  const handleDeleteGroup = (group: Group) => {
+    if (!confirm(`Excluir o grupo "${group.name}" e todos os seus gastos e acertos? Esta ação não pode ser desfeita.`)) return;
+    const nextGroups = groups.filter(g => g.id !== group.id);
+    const nextExpenses = expenses.filter(e => e.groupId !== group.id);
+    setGroups(nextGroups);
+    setExpenses(nextExpenses);
+    setSelectedGroupId(null);
+    saveToDisk(friends, nextGroups, nextExpenses, activeUserId);
+    showNotice('Grupo e lançamentos excluídos.');
+  };
+
   const handleDeleteExpense = (id: string) => {
+    if (!confirm('Excluir este lançamento? Os saldos serão recalculados.')) return;
     const updated = expenses.filter(e => e.id !== id);
     setExpenses(updated);
     saveToDisk(friends, groups, updated, activeUserId);
@@ -256,7 +294,7 @@ export default function App() {
     return expenses.filter(e => {
       // Direct settlement or shared transaction
       const isPayer = e.paidById === activeUserId || e.paidById === otherId;
-      const operatesFriend = e.splits[activeUserId] > 0 || e.splits[otherId] > 0;
+      const operatesFriend = e.paidById === activeUserId ? e.splits[otherId] > 0 : e.splits[activeUserId] > 0;
       return isPayer && operatesFriend;
     });
   };
@@ -539,7 +577,7 @@ export default function App() {
                   <div>
                     <span className="block text-[10px] uppercase font-bold tracking-wider text-nat-muted">Te devem no total</span>
                     <span className="block text-2xl font-serif font-bold text-nat-green leading-tight">
-                      R$ {Object.values(globalBalances).reduce((acc, b) => b > 0 ? acc + b : acc, 0).toFixed(2)}
+                      R$ {friends.reduce((sum, friend) => sum + Math.max(0, balanceWithFriend(expenses, activeUserId, friend.id)), 0).toFixed(2)}
                     </span>
                   </div>
                 </div>
@@ -551,7 +589,7 @@ export default function App() {
                   <div>
                     <span className="block text-[10px] uppercase font-bold tracking-wider text-nat-muted">Você deve no total</span>
                     <span className="block text-2xl font-serif font-bold text-nat-red leading-tight">
-                      R$ {Math.abs(Object.values(globalBalances).reduce((acc, b) => b < 0 ? acc + b : acc, 0)).toFixed(2)}
+                      R$ {friends.reduce((sum, friend) => sum + Math.max(0, -balanceWithFriend(expenses, activeUserId, friend.id)), 0).toFixed(2)}
                     </span>
                   </div>
                 </div>
@@ -672,7 +710,7 @@ export default function App() {
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" id="friends-balances-grid">
                     {friends.map(friend => {
-                      const balance = globalBalances[friend.id] || 0;
+                      const balance = balanceWithFriend(expenses, activeUserId, friend.id);
                       return (
                         <div
                           key={friend.id}
@@ -696,14 +734,14 @@ export default function App() {
                           <div className="text-right flex-shrink-0">
                             {balance > 0 ? (
                               <div>
-                                <span className="block text-[9px] uppercase font-bold text-nat-green tracking-wider">Credor</span>
+                                <span className="block text-[9px] uppercase font-bold text-nat-green tracking-wider">Deve a você</span>
                                 <span className="block text-xs font-bold text-nat-green">
                                   + R$ {balance.toFixed(2)}
                                 </span>
                               </div>
                             ) : balance < 0 ? (
                               <div>
-                                <span className="block text-[9px] uppercase font-bold text-nat-red tracking-wider">Devedor</span>
+                                <span className="block text-[9px] uppercase font-bold text-nat-red tracking-wider">Você deve</span>
                                 <span className="block text-xs font-bold text-nat-red">
                                   R$ {balance.toFixed(2)}
                                 </span>
@@ -859,6 +897,10 @@ export default function App() {
                           </span>
                           <h2 className="text-2xl font-serif font-bold italic tracking-tight text-nat-text mt-2.5 mb-1">{group.name}</h2>
                           <p className="text-sm text-nat-muted leading-relaxed">{group.description || 'Sem descrição.'}</p>
+                          <div className="flex flex-wrap gap-3 mt-4">
+                            <button id="edit-group-btn" className="text-sm font-bold text-nat-primary cursor-pointer" onClick={() => { setEditingGroup(group); setIsGroupModalOpen(true); }}>Editar grupo</button>
+                            <button id="delete-group-btn" className="text-sm font-bold text-nat-red cursor-pointer" onClick={() => handleDeleteGroup(group)}>Excluir grupo</button>
+                          </div>
                         </div>
 
                         {/* Top quick metrics for the group */}
@@ -1037,14 +1079,18 @@ export default function App() {
                                     </div>
 
                                     {/* Action items deletion */}
+                                    {!expense.isSettlement && <button
+  onClick={() => { setEditingExpense(expense); setIsExpenseModalOpen(true); }}
+  className="text-nat-primary text-xs font-bold flex items-center gap-1 cursor-pointer"
+  aria-label={`Editar despesa ${expense.description}`}
+><Pencil size={15} /> Editar</button>}
                                     <button
                                       onClick={() => handleDeleteExpense(expense.id)}
                                       className="p-1.5 text-nat-muted hover:text-nat-red hover:bg-nat-red/10 rounded-full transition-colors flex-shrink-0 cursor-pointer"
                                       title="Apagar despesa"
                                       id={`group-expense-delete-${expense.id}`}
                                     >
-                                      <Trash2 size={15} />
-                                    </button>
+                                      <Trash2 size={15} /><span className="text-xs ml-1">Excluir</span></button>
                                   </div>
                                 </div>
                               );
@@ -1104,7 +1150,7 @@ export default function App() {
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4" id="friends-grid-listing">
                       {friends.map(friend => {
-                        const balance = globalBalances[friend.id] || 0;
+                        const balance = balanceWithFriend(expenses, activeUserId, friend.id);
                         const sharedCount = getExpensesSharedWithFriend(friend.id).length;
 
                         return (
@@ -1158,7 +1204,7 @@ export default function App() {
                   const friend = friends.find(f => f.id === selectedFriendId);
                   if (!friend) return null;
 
-                  const balance = globalBalances[friend.id] || 0;
+                  const balance = balanceWithFriend(expenses, activeUserId, friend.id);
                   const sharedExpenses = getExpensesSharedWithFriend(friend.id);
 
                   return (
@@ -1276,14 +1322,19 @@ export default function App() {
                                         R$ {expense.amount.toFixed(2)}
                                       </span>
                                     </div>
+
+                                    {!expense.isSettlement && <button
+  onClick={() => { setEditingExpense(expense); setIsExpenseModalOpen(true); }}
+  className="text-nat-primary text-xs font-bold flex items-center gap-1 cursor-pointer"
+  aria-label={`Editar despesa ${expense.description}`}
+><Pencil size={15} /> Editar</button>}
                                     
                                     <button
                                       onClick={() => handleDeleteExpense(expense.id)}
                                       className="p-1.5 text-nat-muted hover:text-nat-red hover:bg-nat-red/10 rounded-full transition-colors cursor-pointer"
                                       id={`delete-shared-expense-${expense.id}`}
                                     >
-                                      <Trash2 size={14} />
-                                    </button>
+                                      <Trash2 size={14} /><span className="text-xs ml-1">Excluir</span></button>
                                   </div>
                                 </div>
                               );
@@ -1483,14 +1534,19 @@ export default function App() {
                                   </span>
                                 </div>
 
+                                {!expense.isSettlement && <button
+  onClick={() => { setEditingExpense(expense); setIsExpenseModalOpen(true); }}
+  className="text-nat-primary text-xs font-bold flex items-center gap-1 cursor-pointer"
+  aria-label={`Editar despesa ${expense.description}`}
+><Pencil size={15} /> Editar</button>}
+
                                 <button
                                   onClick={() => handleDeleteExpense(expense.id)}
                                   className="p-1.5 text-nat-muted hover:text-nat-red hover:bg-nat-red/10 rounded-full transition-colors flex-shrink-0 cursor-pointer"
                                   title="Apagar permanente"
                                   id={`delete-history-btn-${expense.id}`}
                                 >
-                                  <Trash2 size={15} />
-                                </button>
+                                  <Trash2 size={15} /><span className="text-xs ml-1">Excluir</span></button>
                               </div>
                             </div>
                           );
@@ -1733,17 +1789,19 @@ export default function App() {
 
       <AddGroupModal
         isOpen={isGroupModalOpen}
-        onClose={() => setIsGroupModalOpen(false)}
+        onClose={() => { setIsGroupModalOpen(false); setEditingGroup(null); }}
+        initialGroup={editingGroup}
         friends={friends}
         onAddGroup={handleAddGroup}
       />
 
       <AddExpenseModal
         isOpen={isExpenseModalOpen}
-        onClose={() => setIsExpenseModalOpen(false)}
+        onClose={() => { setIsExpenseModalOpen(false); setEditingExpense(null); }}
+        initialExpense={editingExpense}
         friends={friends}
         groups={groups}
-        activeGroupId={selectedGroupId}
+        activeGroupId={activeTab === 'groups' ? selectedGroupId : null}
         onAddExpense={handleAddExpense}
       />
 
@@ -1752,7 +1810,7 @@ export default function App() {
         onClose={() => setIsSettleModalOpen(false)}
         friends={friends}
         groups={groups}
-        activeGroupId={selectedGroupId}
+        activeGroupId={activeTab === 'groups' ? selectedGroupId : null}
         initialFromId={settlePayerId}
         initialToId={settleReceiverId}
         initialAmount={settleAmount}
